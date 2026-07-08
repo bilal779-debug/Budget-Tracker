@@ -594,37 +594,93 @@
         return CATEGORY_ICONS[catName] || "label";
     }
 
-    // --- DATA MIGRATION SYSTEM ---
+    // --- INTELLIGENT DATA MIGRATION SYSTEM ---
     function migrateData() {
         let dataChanged = false;
         
+        // Comprehensive map to link old user categories to new standards
+        const CATEGORY_MAP = {
+            "food & drinks": "Food", "food & dining": "Food", "meals": "Food", "restaurant": "Food", "snack": "Food",
+            "travel": "Transport", "transit": "Transport", "auto": "Transport", "fuel": "Transport", "gas": "Transport", "transportation": "Transport",
+            "utilities": "Bills", "utility": "Bills", "electricity": "Bills", "water bill": "Bills", "gas bill": "Bills", "internet": "Bills", "phone": "Bills",
+            "purchases": "Shopping", "clothes": "Shopping", "apparel": "Shopping",
+            "medical": "Health", "doctor": "Health", "pharmacy": "Health", "medicine": "Health", "fitness": "Health",
+            "school": "Education", "college": "Education", "tuition": "Education", "books": "Education",
+            "wages": "Salary", "income": "Salary", "paycheck": "Salary",
+            "misc": "Miscellaneous", "other": "Miscellaneous", "others": "Miscellaneous", "general": "Miscellaneous",
+            "materials": "Other Materials", "equipment": "Tools", "tools & equipment": "Tools",
+            "house": "Rent", "housing": "Rent", "mortgage": "Rent"
+        };
+
+        // 1. Force add ALL standard categories to the user's category array
+        let initialCatCount = userCategories.length;
+        DEFAULT_CATEGORIES.forEach(cat => {
+            if (!userCategories.includes(cat)) {
+                userCategories.push(cat);
+            }
+        });
+        if (userCategories.length !== initialCatCount) {
+            dataChanged = true;
+        }
+
+        // 2. Migrate Expenses Loop
         expenses = expenses.map(exp => {
             let e = { ...exp };
+            
+            // Fix Price Data Type
             if (typeof e.price !== 'number' || isNaN(e.price)) {
                 let rawPrice = String(e.price).replace(/[^0-9.-]+/g, "");
                 e.price = parseFloat(rawPrice) || 0;
                 dataChanged = true;
             }
+            
+            // Fix Outdated or Missing Categories
             if (!e.category) { 
                 e.category = "Miscellaneous"; 
                 dataChanged = true; 
+            } else {
+                let oldCatLC = e.category.trim().toLowerCase();
+                
+                // If old category name matches the mapping dictionary, update it
+                if (CATEGORY_MAP[oldCatLC] && e.category !== CATEGORY_MAP[oldCatLC]) {
+                    e.category = CATEGORY_MAP[oldCatLC];
+                    dataChanged = true;
+                }
+                
+                // Safe Fallback: If it's a fully custom unknown category, register it so it calculates correctly
+                if (!userCategories.includes(e.category)) {
+                    userCategories.push(e.category);
+                    dataChanged = true;
+                }
             }
             return e;
         });
 
+        // 3. Migrate Targets Loop (To ensure mapping matches the new expense mappings perfectly)
         targets = targets.map(t => {
             let targ = { ...t };
+            
             if (typeof targ.amount !== 'number' || isNaN(targ.amount)) {
                 let rawAmt = String(targ.amount).replace(/[^0-9.-]+/g, "");
                 targ.amount = parseFloat(rawAmt) || 0;
                 dataChanged = true;
             }
+            
+            if (targ.category) {
+                let oldCatLC = targ.category.trim().toLowerCase();
+                if (CATEGORY_MAP[oldCatLC] && targ.category !== CATEGORY_MAP[oldCatLC]) {
+                    targ.category = CATEGORY_MAP[oldCatLC];
+                    dataChanged = true;
+                }
+            }
             return targ;
         });
 
+        // 4. Save permanently if any corrections were made during load
         if (dataChanged) {
             localStorage.setItem('expensesArray', JSON.stringify(expenses));
             localStorage.setItem('targetsArray', JSON.stringify(targets));
+            localStorage.setItem('userCategoriesArray', JSON.stringify(userCategories));
         }
     }
 
@@ -655,15 +711,12 @@
         document.getElementById('installAppBtn').style.display = 'none';
     });
 
-    // PWA Service Worker Registration & Version Detection
     if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
             navigator.serviceWorker.register('./sw.js').then(reg => {
-                // Detect Update Available
                 reg.addEventListener('updatefound', () => {
                     const newWorker = reg.installing;
                     newWorker.addEventListener('statechange', () => {
-                        // Check if new SW is installed and the page is currently controlled by an older SW
                         if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
                             document.getElementById('updateToast').classList.add('show');
                         }
@@ -673,7 +726,6 @@
                 console.log('SW registration failed:', error);
             });
             
-            // Reload page if SW takes over automatically
             let refreshing;
             navigator.serviceWorker.addEventListener('controllerchange', () => {
                 if (refreshing) return;
@@ -688,6 +740,7 @@
         document.getElementById('totalBudget').value = localStorage.getItem('budget') || '';
         setCurrentDateTime();
         
+        // Critical: Data migration always runs BEFORE rendering to enforce new system mappings
         migrateData(); 
         syncAndRenderAll(); 
     };
@@ -1205,7 +1258,6 @@
         const doc = new jsPDF();
         let yPos = 20;
         
-        // 1. Cover/Header
         doc.setFontSize(22);
         doc.setTextColor(67, 97, 238);
         doc.text("Budget Tracker Pro - Complete Report", 14, yPos);
@@ -1217,7 +1269,6 @@
         doc.text(`Generated on: ${now.toLocaleDateString()} at ${now.toLocaleTimeString()}`, 14, yPos);
         yPos += 15;
         
-        // Data Prep
         let budget = parseFloat(document.getElementById('totalBudget').value) || 0;
         let totalSpent = 0; let todaySpent = 0; let yesterdaySpent = 0;
         let todayStr = getTargetDateString(0); let yesterdayStr = getTargetDateString(1);
@@ -1240,7 +1291,6 @@
         let remaining = budget - totalSpent;
         let percentage = budget > 0 ? ((totalSpent / budget) * 100).toFixed(1) : "0.0";
         
-        // 2. Budget Summary
         doc.setFontSize(14);
         doc.setTextColor(30, 41, 59);
         doc.text("1. Budget Summary", 14, yPos);
@@ -1262,7 +1312,6 @@
         });
         yPos = doc.lastAutoTable.finalY + 15;
         
-        // 3. Payment Targets Summary
         doc.setFontSize(14);
         doc.text("2. Payment Targets Summary", 14, yPos);
         yPos += 6;
@@ -1284,7 +1333,6 @@
         
         if(yPos > 240) { doc.addPage(); yPos = 20; }
         
-        // 4. Category Expense Summary
         doc.setFontSize(14);
         doc.text("3. Category Expense Summary", 14, yPos);
         yPos += 6;
@@ -1303,7 +1351,6 @@
         });
         yPos = doc.lastAutoTable.finalY + 15;
         
-        // 5. Statistics
         if(yPos > 240) { doc.addPage(); yPos = 20; }
         doc.setFontSize(14);
         doc.text("4. Expense Statistics", 14, yPos);
@@ -1330,7 +1377,6 @@
         });
         yPos = doc.lastAutoTable.finalY + 15;
         
-        // 6. Complete Expense History
         if(yPos > 240) { doc.addPage(); yPos = 20; }
         doc.setFontSize(14);
         doc.text("5. Complete Expense History", 14, yPos);
@@ -1365,7 +1411,6 @@
         });
         yPos = doc.lastAutoTable.finalY + 15;
         
-        // 7. Final Summary
         if(yPos > 240) { doc.addPage(); yPos = 20; }
         doc.setFontSize(14);
         doc.setTextColor(30, 41, 59);
