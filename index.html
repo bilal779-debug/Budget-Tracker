@@ -354,7 +354,7 @@
         <div id="screen-history" class="screen">
             <div class="search-bar">
                 <div class="input-group" style="margin: 0;">
-                    <input type="text" id="searchBar" placeholder="Search expenses..." oninput="renderTable()">
+                    <input type="text" id="searchBar" placeholder="Search expenses..." oninput="renderTableOnly()">
                 </div>
             </div>
             <div class="card" style="padding: 0; border: none; box-shadow: none; background: transparent;">
@@ -524,11 +524,8 @@
     // --- PWA INSTALLATION LOGIC ---
     let deferredPrompt;
     window.addEventListener('beforeinstallprompt', (e) => {
-        // Prevent Chrome 67 and earlier from automatically showing the prompt
         e.preventDefault();
-        // Stash the event so it can be triggered later.
         deferredPrompt = e;
-        // Show the install button in Settings
         const installBtn = document.getElementById('installAppBtn');
         if (installBtn) {
             installBtn.style.display = 'flex';
@@ -547,7 +544,6 @@
         }
     });
 
-    // Hide the button if the app is already installed
     window.addEventListener('appinstalled', (evt) => {
         document.getElementById('installAppBtn').style.display = 'none';
         console.log('PWA was installed');
@@ -557,7 +553,7 @@
     window.onload = () => {
         document.getElementById('totalBudget').value = localStorage.getItem('budget') || '';
         setCurrentDateTime();
-        renderTable(); 
+        syncAndRenderAll(); 
     };
 
     // --- Custom Confirm Modal Logic ---
@@ -653,7 +649,6 @@
         } else {
             fab.style.display = 'none';
         }
-        calculate();
     }
 
     // --- Helpers ---
@@ -700,7 +695,7 @@
 
     function saveBudget() {
         localStorage.setItem('budget', document.getElementById('totalBudget').value);
-        calculate();
+        syncAndRenderAll();
     }
 
     // --- Target System ---
@@ -721,7 +716,7 @@
         document.getElementById('targetCategoryText').innerText = 'Tap to select category...';
         document.getElementById('targetCategoryText').style.color = 'var(--text-muted)';
         
-        calculate(); 
+        syncAndRenderAll(); 
         switchScreen('targets');
     }
 
@@ -729,74 +724,7 @@
         showConfirmModal("Delete this payment target?", () => {
             targets.splice(index, 1);
             localStorage.setItem('targetsArray', JSON.stringify(targets));
-            calculate();
-        });
-    }
-
-    function renderTargets() {
-        let container = document.getElementById('targetsContainer');
-        container.innerHTML = '';
-        if(targets.length === 0) {
-            container.innerHTML = '<p style="text-align:center; color:var(--text-muted);">No targets created yet.</p>';
-        }
-        targets.forEach((target, index) => {
-            let paid = expenses
-                .filter(exp => exp.category === target.category)
-                .reduce((sum, exp) => sum + exp.price, 0);
-            let remaining = target.amount - paid;
-
-            container.innerHTML += `
-                <div class="card target-card">
-                    <h4>
-                        <span>${target.name}</span>
-                        <button class="del-target" onclick="deleteTarget(${index})">
-                            <span class="material-symbols-outlined">delete</span>
-                        </button>
-                    </h4>
-                    <span class="target-badge">${target.category}</span>
-                    <div class="target-stats">
-                        <div class="ts-item">
-                            <small>Target</small>
-                            <span>${formatCurrency(target.amount)}</span>
-                        </div>
-                        <div class="ts-item" style="color: #fca5a5;">
-                            <small>Paid</small>
-                            <span>${formatCurrency(paid)}</span>
-                        </div>
-                        <div class="ts-item" style="color: #6ee7b7;">
-                            <small>Remaining</small>
-                            <span>${formatCurrency(remaining)}</span>
-                        </div>
-                    </div>
-                </div>
-            `;
-        });
-    }
-
-    // --- Categories Summary ---
-    function renderCategorySummary() {
-        let container = document.getElementById('categorySummaryContainer');
-        container.innerHTML = '';
-        let categoryTotals = {};
-        
-        expenses.forEach(exp => {
-            let cat = exp.category;
-            categoryTotals[cat] = (categoryTotals[cat] || 0) + exp.price;
-        });
-
-        const keys = Object.keys(categoryTotals);
-        if(keys.length === 0) {
-            container.innerHTML = '<p style="text-align:center; color:var(--text-muted);">No data to show.</p>';
-            return;
-        }
-
-        keys.sort((a,b) => categoryTotals[b] - categoryTotals[a]).forEach(cat => {
-            container.innerHTML += `
-                <div class="cat-sum-item">
-                    <span class="cat-sum-name">${cat}</span>
-                    <span class="cat-sum-val">Rs ${formatCurrency(categoryTotals[cat])}</span>
-                </div>
-            `;
+            syncAndRenderAll();
         });
     }
 
@@ -828,7 +756,7 @@
         setCurrentDateTime();
         
         localStorage.setItem('expensesArray', JSON.stringify(expenses));
-        renderTable();
+        syncAndRenderAll(); // Fully synchronizes UI elements immediately
         switchScreen('history');
     }
 
@@ -873,17 +801,132 @@
         showConfirmModal("Are you sure you want to delete this expense?", () => {
             expenses.splice(index, 1);
             localStorage.setItem('expensesArray', JSON.stringify(expenses));
-            renderTable();
+            syncAndRenderAll();
         });
     }
 
-    function renderTable() {
+    // --- MAIN SYNCHRONIZATION ENGINE ---
+    // Fixes Issue 1 & 2: Real-time recalculation of all interconnected components
+    function syncAndRenderAll() {
+        let budget = parseFloat(document.getElementById('totalBudget').value) || 0;
+        let totalSpent = 0; let todaySpent = 0; let yesterdaySpent = 0;
+        let todayStr = getTargetDateString(0); let yesterdayStr = getTargetDateString(1);
+
+        // Issue 2 Fix: Initialize ALL available categories with 0, so they reflect correctly even without expenses
+        let categoryTotals = {};
+        userCategories.forEach(cat => { categoryTotals[cat] = 0; });
+        targets.forEach(t => { categoryTotals[t.category] = 0; }); // Safety check for target categories
+
+        // Process all expenses as single source of truth
+        expenses.forEach(exp => {
+            totalSpent += exp.price;
+            if(exp.date === todayStr) todaySpent += exp.price;
+            if(exp.date === yesterdayStr) yesterdaySpent += exp.price;
+            
+            if (categoryTotals[exp.category] === undefined) {
+                categoryTotals[exp.category] = 0;
+            }
+            categoryTotals[exp.category] += exp.price;
+        });
+
+        let remaining = budget - totalSpent;
+        
+        // 1. Update Dashboard Widgets
+        document.getElementById('dashBudgetVal').innerText = formatCurrency(budget);
+        document.getElementById('dashExpenseVal').innerText = formatCurrency(totalSpent);
+        document.getElementById('dashBalanceVal').innerText = formatCurrency(remaining);
+        document.getElementById('dashTodayVal').innerText = formatCurrency(todaySpent);
+        document.getElementById('dashYesterdayVal').innerText = formatCurrency(yesterdaySpent);
+
+        // 2. Update Progress Bar
+        let percentage = budget > 0 ? (totalSpent / budget) * 100 : 0;
+        let displayPercent = percentage > 100 ? 100 : percentage;
+        
+        document.getElementById('dashUsedVal').innerText = displayPercent.toFixed(1) + "%";
+        let bar = document.getElementById('progressBar');
+        bar.style.width = displayPercent + "%";
+        
+        if(percentage <= 60) {
+            bar.style.backgroundColor = 'var(--success)';
+            document.getElementById('dashUsedVal').style.color = 'var(--success)';
+        } else if(percentage <= 90) {
+            bar.style.backgroundColor = 'var(--warning)';
+            document.getElementById('dashUsedVal').style.color = 'var(--warning)';
+        } else {
+            bar.style.backgroundColor = 'var(--danger)';
+            document.getElementById('dashUsedVal').style.color = 'var(--danger)';
+        }
+
+        // 3. Render Category Summary (Fully synchronized, includes 0 balances)
+        let catContainer = document.getElementById('categorySummaryContainer');
+        catContainer.innerHTML = '';
+        const keys = Object.keys(categoryTotals);
+        
+        if(keys.length === 0) {
+            catContainer.innerHTML = '<p style="text-align:center; color:var(--text-muted);">No data to show.</p>';
+        } else {
+            keys.sort((a,b) => categoryTotals[b] - categoryTotals[a]).forEach(cat => {
+                catContainer.innerHTML += `
+                    <div class="cat-sum-item">
+                        <span class="cat-sum-name">${cat}</span>
+                        <span class="cat-sum-val">Rs ${formatCurrency(categoryTotals[cat])}</span>
+                    </div>
+                `;
+            });
+        }
+
+        // 4. Render Active Targets (Fixes Issue 1: dynamically calculates paid amount)
+        let targetContainer = document.getElementById('targetsContainer');
+        targetContainer.innerHTML = '';
+        if(targets.length === 0) {
+            targetContainer.innerHTML = '<p style="text-align:center; color:var(--text-muted);">No targets created yet.</p>';
+        } else {
+            targets.forEach((target, index) => {
+                let paid = expenses
+                    .filter(exp => exp.category === target.category)
+                    .reduce((sum, exp) => sum + exp.price, 0);
+                let rem = target.amount - paid;
+
+                targetContainer.innerHTML += `
+                    <div class="card target-card">
+                        <h4>
+                            <span>${target.name}</span>
+                            <button class="del-target" onclick="deleteTarget(${index})">
+                                <span class="material-symbols-outlined">delete</span>
+                            </button>
+                        </h4>
+                        <span class="target-badge">${target.category}</span>
+                        <div class="target-stats">
+                            <div class="ts-item">
+                                <small>Target</small>
+                                <span>${formatCurrency(target.amount)}</span>
+                            </div>
+                            <div class="ts-item" style="color: #fca5a5;">
+                                <small>Paid</small>
+                                <span>${formatCurrency(paid)}</span>
+                            </div>
+                            <div class="ts-item" style="color: #6ee7b7;">
+                                <small>Remaining</small>
+                                <span>${formatCurrency(rem)}</span>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+        }
+
+        // 5. Render History List
+        renderTableOnly();
+    }
+
+    function renderTableOnly() {
         let container = document.getElementById('expenseList');
         let searchQuery = document.getElementById('searchBar').value.toLowerCase();
         container.innerHTML = '';
         
         if (expenses.length === 0) {
             container.innerHTML = '<p style="text-align:center; color: var(--text-muted); padding: 20px;">No expenses recorded yet.</p>';
+            return;
         }
 
         expenses.forEach((exp, originalIndex) => {
@@ -918,53 +961,6 @@
                     </div>`;
             }
         });
-        calculate();
-    }
-
-    // --- Main Calculations ---
-    function calculate() {
-        let budget = parseFloat(document.getElementById('totalBudget').value) || 0;
-        let totalSpent = 0; let todaySpent = 0; let yesterdaySpent = 0;
-        let todayStr = getTargetDateString(0); let yesterdayStr = getTargetDateString(1);
-
-        expenses.forEach(exp => {
-            totalSpent += exp.price;
-            if(exp.date === todayStr) todaySpent += exp.price;
-            if(exp.date === yesterdayStr) yesterdaySpent += exp.price;
-        });
-
-        let remaining = budget - totalSpent;
-        
-        document.getElementById('dashBudgetVal').innerText = formatCurrency(budget);
-        document.getElementById('dashExpenseVal').innerText = formatCurrency(totalSpent);
-        document.getElementById('dashBalanceVal').innerText = formatCurrency(remaining);
-        document.getElementById('dashTodayVal').innerText = formatCurrency(todaySpent);
-        document.getElementById('dashYesterdayVal').innerText = formatCurrency(yesterdaySpent);
-
-        let percentage = 0;
-        if(budget > 0) {
-            percentage = (totalSpent / budget) * 100;
-        }
-        
-        let displayPercent = percentage > 100 ? 100 : percentage;
-        document.getElementById('dashUsedVal').innerText = displayPercent.toFixed(1) + "%";
-        
-        let bar = document.getElementById('progressBar');
-        bar.style.width = displayPercent + "%";
-        
-        if(percentage <= 60) {
-            bar.style.backgroundColor = 'var(--success)';
-            document.getElementById('dashUsedVal').style.color = 'var(--success)';
-        } else if(percentage <= 90) {
-            bar.style.backgroundColor = 'var(--warning)';
-            document.getElementById('dashUsedVal').style.color = 'var(--warning)';
-        } else {
-            bar.style.backgroundColor = 'var(--danger)';
-            document.getElementById('dashUsedVal').style.color = 'var(--danger)';
-        }
-
-        renderCategorySummary();
-        renderTargets();
     }
 
     // --- Utilities (PNG & PDF Export) ---
@@ -1009,14 +1005,21 @@
         let budget = parseFloat(document.getElementById('totalBudget').value) || 0;
         let totalSpent = 0; let todaySpent = 0; let yesterdaySpent = 0;
         let todayStr = getTargetDateString(0); let yesterdayStr = getTargetDateString(1);
+        
+        // Match PDF report zero-handling with the core logic
         let categoryTotals = {};
+        userCategories.forEach(cat => categoryTotals[cat] = 0);
+        targets.forEach(t => categoryTotals[t.category] = 0);
 
         expenses.forEach(exp => {
             totalSpent += exp.price;
             if(exp.date === todayStr) todaySpent += exp.price;
             if(exp.date === yesterdayStr) yesterdaySpent += exp.price;
             let cat = exp.category || 'Other';
-            categoryTotals[cat] = (categoryTotals[cat] || 0) + exp.price;
+            if (categoryTotals[cat] === undefined) {
+                categoryTotals[cat] = 0;
+            }
+            categoryTotals[cat] += exp.price;
         });
 
         let remaining = budget - totalSpent;
