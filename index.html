@@ -203,7 +203,6 @@
         .expense-item { display: flex; align-items: center; justify-content: space-between; padding: 14px 0; border-bottom: 1px solid var(--outline); }
         .expense-item:last-child { border-bottom: none; }
         
-        /* New Icon Styling */
         .expense-icon {
             width: 44px; height: 44px;
             background: var(--primary-container);
@@ -558,7 +557,7 @@
 
 
 <script>
-    // --- Data Storage & Global Variables (Single Source of Truth) ---
+    // --- Data Storage & Global Variables ---
     let expenses = JSON.parse(localStorage.getItem('expensesArray')) || [];
     let targets = JSON.parse(localStorage.getItem('targetsArray')) || [];
     let editIndex = -1; 
@@ -595,93 +594,89 @@
     }
 
     // --- INTELLIGENT DATA MIGRATION SYSTEM ---
-    // Fixes all backward compatibility and sync issues with old expenses automatically
+    // Fixes old emoji strings and correctly merges categories perfectly.
     function migrateData() {
         let dataChanged = false;
         
-        // Comprehensive map to link old user categories to new standards
-        const CATEGORY_MAP = {
-            "food & drinks": "Food", "food & dining": "Food", "meals": "Food", "restaurant": "Food", "snack": "Food", "food": "Food",
-            "travel": "Transport", "transit": "Transport", "auto": "Transport", "fuel": "Transport", "gas": "Transport", "transportation": "Transport", "transport": "Transport",
-            "utilities": "Bills", "utility": "Bills", "electricity": "Bills", "water bill": "Bills", "gas bill": "Bills", "internet": "Bills", "phone": "Bills", "bills": "Bills",
-            "purchases": "Shopping", "clothes": "Shopping", "apparel": "Shopping", "shopping": "Shopping",
-            "medical": "Health", "doctor": "Health", "pharmacy": "Health", "medicine": "Health", "fitness": "Health", "health": "Health",
-            "school": "Education", "college": "Education", "tuition": "Education", "books": "Education", "education": "Education",
-            "wages": "Salary", "income": "Salary", "paycheck": "Salary", "salary": "Salary",
-            "misc": "Miscellaneous", "other": "Miscellaneous", "others": "Miscellaneous", "general": "Miscellaneous", "miscellaneous": "Miscellaneous",
-            "materials": "Other Materials", "equipment": "Tools", "tools & equipment": "Tools",
-            "house": "Rent", "housing": "Rent", "mortgage": "Rent", "rent": "Rent"
-        };
+        // Helper function to strip emojis and map correctly
+        function cleanCategory(catName) {
+            if (!catName) return "Miscellaneous";
+            
+            // 1. Strip all emojis and extra spaces from old names
+            let cleaned = catName.replace(/([\u2700-\u27BF]|[\uE000-\uF8FF]|\uD83C[\uDC00-\uDFFF]|\uD83D[\uDC00-\uDFFF]|[\u2011-\u26FF]|\uD83E[\uDD10-\uDDFF])/g, '').trim();
+            
+            // 2. Direct mapping for completely changed names
+            const CATEGORY_MAP = {
+                "food & drinks": "Food", "food & dining": "Food", "meals": "Food", "restaurant": "Food", "snack": "Food", "food": "Food",
+                "travel": "Transport", "transit": "Transport", "auto": "Transport", "fuel": "Transport", "gas": "Transport", "transportation": "Transport", "transport": "Transport",
+                "utilities": "Bills", "utility": "Bills", "electricity": "Bills", "water bill": "Bills", "gas bill": "Bills", "internet": "Bills", "phone": "Bills", "bills": "Bills",
+                "purchases": "Shopping", "clothes": "Shopping", "apparel": "Shopping", "shopping": "Shopping",
+                "medical": "Health", "doctor": "Health", "pharmacy": "Health", "medicine": "Health", "fitness": "Health", "health": "Health",
+                "school": "Education", "college": "Education", "tuition": "Education", "books": "Education", "education": "Education",
+                "wages": "Salary", "income": "Salary", "paycheck": "Salary", "salary": "Salary",
+                "misc": "Miscellaneous", "other": "Miscellaneous", "others": "Miscellaneous", "general": "Miscellaneous", "miscellaneous": "Miscellaneous",
+                "materials": "Other Materials", "equipment": "Tools", "tools & equipment": "Tools",
+                "house": "Rent", "housing": "Rent", "mortgage": "Rent", "rent": "Rent"
+            };
 
-        // 1. Force add ALL standard categories to the user's category array
-        let initialCatCount = userCategories.length;
-        DEFAULT_CATEGORIES.forEach(cat => {
-            if (!userCategories.includes(cat)) {
-                userCategories.push(cat);
-            }
-        });
-        if (userCategories.length !== initialCatCount) {
-            dataChanged = true;
+            let lc = cleaned.toLowerCase();
+            if (CATEGORY_MAP[lc]) return CATEGORY_MAP[lc];
+
+            // 3. Fallback: If the cleaned name (or old name) contains our standard category, merge it!
+            // Example: "👷 Contractor Payment" will hit this and perfectly become "Contractor Payment"
+            let found = DEFAULT_CATEGORIES.find(c => catName.toLowerCase().includes(c.toLowerCase()));
+            if(found) return found;
+
+            // 4. Return title-cased custom name if nothing else matches
+            return cleaned.replace(/\b\w/g, l => l.toUpperCase()) || "Miscellaneous";
         }
 
-        // 2. Migrate Expenses Loop
+        // Apply cleaning strictly to expenses array
         expenses = expenses.map(exp => {
             let e = { ...exp };
-            
-            // Fix Corrupt Price Strings
             if (typeof e.price !== 'number' || isNaN(e.price)) {
                 let rawPrice = String(e.price).replace(/[^0-9.-]+/g, "");
                 e.price = parseFloat(rawPrice) || 0;
                 dataChanged = true;
             }
-
-            // Fill Missing Timestamps
             if (!e.date) { e.date = getTargetDateString(0); dataChanged = true; }
             if (!e.time) { e.time = "12:00"; dataChanged = true; }
             
-            // Fix Outdated or Missing Categories
-            if (!e.category) { 
-                e.category = "Miscellaneous"; 
-                dataChanged = true; 
-            } else {
-                let oldCatLC = e.category.trim().toLowerCase();
-                
-                // If old category name matches the mapping dictionary, update it instantly
-                if (CATEGORY_MAP[oldCatLC] && e.category !== CATEGORY_MAP[oldCatLC]) {
-                    e.category = CATEGORY_MAP[oldCatLC];
-                    dataChanged = true;
-                }
-                
-                // Safe Fallback: Register fully custom unknown categories
-                if (!userCategories.includes(e.category)) {
-                    userCategories.push(e.category);
-                    dataChanged = true;
-                }
-            }
+            let oldCat = e.category;
+            e.category = cleanCategory(oldCat);
+            if (oldCat !== e.category) dataChanged = true;
+
             return e;
         });
 
-        // 3. Migrate Targets Loop (Sync target categories)
+        // Apply cleaning strictly to targets array
         targets = targets.map(t => {
             let targ = { ...t };
-            
             if (typeof targ.amount !== 'number' || isNaN(targ.amount)) {
                 let rawAmt = String(targ.amount).replace(/[^0-9.-]+/g, "");
                 targ.amount = parseFloat(rawAmt) || 0;
                 dataChanged = true;
             }
             
-            if (targ.category) {
-                let oldCatLC = targ.category.trim().toLowerCase();
-                if (CATEGORY_MAP[oldCatLC] && targ.category !== CATEGORY_MAP[oldCatLC]) {
-                    targ.category = CATEGORY_MAP[oldCatLC];
-                    dataChanged = true;
-                }
-            }
+            let oldCat = targ.category;
+            targ.category = cleanCategory(oldCat);
+            if (oldCat !== targ.category) dataChanged = true;
+
             return targ;
         });
 
-        // 4. Save permanently if any corrections were made during load
+        // 4. Clean user categories array completely from duplicate emojis and out-of-sync names
+        let newCategoriesSet = new Set(DEFAULT_CATEGORIES);
+        expenses.forEach(e => newCategoriesSet.add(e.category));
+        targets.forEach(t => newCategoriesSet.add(t.category));
+        
+        let newCategoriesArray = Array.from(newCategoriesSet);
+        if (userCategories.length !== newCategoriesArray.length || !userCategories.every((val, index) => val === newCategoriesArray[index])) {
+            userCategories = newCategoriesArray;
+            dataChanged = true;
+        }
+
+        // 5. Final Save to Single Source of Truth
         if (dataChanged) {
             localStorage.setItem('expensesArray', JSON.stringify(expenses));
             localStorage.setItem('targetsArray', JSON.stringify(targets));
@@ -1009,7 +1004,6 @@
         userCategories.forEach(cat => { categoryTotals[cat] = 0; });
         targets.forEach(t => { categoryTotals[t.category] = 0; }); 
 
-        // Single Source of Truth Iteration
         expenses.forEach(exp => {
             totalSpent += exp.price;
             if(exp.date === todayStr) todaySpent += exp.price;
@@ -1107,7 +1101,7 @@
             });
         }
 
-        // 5. Render History List with synced icons
+        // 5. Render History List with dynamic icons
         renderTableOnly();
     }
 
