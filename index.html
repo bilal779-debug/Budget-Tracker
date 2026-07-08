@@ -200,11 +200,23 @@
 
         /* --- Lists (History) --- */
         .search-bar { position: sticky; top: 0; background: var(--background); padding-bottom: 10px; z-index: 10; }
-        .expense-item { display: flex; align-items: center; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid var(--outline); }
+        .expense-item { display: flex; align-items: center; justify-content: space-between; padding: 14px 0; border-bottom: 1px solid var(--outline); }
         .expense-item:last-child { border-bottom: none; }
-        .exp-info { flex: 1; }
+        
+        /* New Icon Styling */
+        .expense-icon {
+            width: 44px; height: 44px;
+            background: var(--primary-container);
+            color: var(--primary);
+            border-radius: var(--radius-full);
+            display: flex; align-items: center; justify-content: center;
+            margin-right: 14px; flex-shrink: 0;
+        }
+        .expense-icon .material-symbols-outlined { font-size: 22px; }
+        
+        .exp-info { flex: 1; display: flex; flex-direction: column; justify-content: center;}
         .exp-title { font-size: 15px; font-weight: 700; color: var(--on-surface); margin-bottom: 4px; }
-        .exp-meta { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-muted); font-weight: 500; }
+        .exp-meta { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-muted); font-weight: 500; flex-wrap: wrap;}
         .exp-badge { background: var(--outline); padding: 2px 8px; border-radius: 10px; color: var(--on-surface); }
         .exp-amount { font-size: 16px; font-weight: 800; color: var(--danger); text-align: right; }
         .exp-actions { display: flex; gap: 8px; margin-top: 6px; justify-content: flex-end; }
@@ -521,6 +533,69 @@
     let activeCategoryField = ''; 
     let currentConfirmCallback = null;
 
+    // --- Dynamic Icons Mapping ---
+    const CATEGORY_ICONS = {
+        "Food": "restaurant", "Transport": "directions_car", "Bills": "receipt_long", 
+        "Shopping": "shopping_cart", "Health": "medical_services", "Education": "school", 
+        "Rent": "house", "Salary": "payments", "Labor": "engineering", 
+        "Contractor Payment": "real_estate_agent", "Cement": "foundation", 
+        "Steel": "hardware", "Bricks": "wall_art", "Sand": "landscape", "Crush": "terrain",
+        "Electrical": "electrical_services", "Plumbing": "plumbing", "Sanitary": "water_drop", 
+        "Paint": "format_paint", "Hardware": "construction", "Wiring": "cable",
+        "Carpenter": "handyman", "Tiles": "grid_on", "Marble": "layers",
+        "Doors": "door_front", "Windows": "window", "Ceiling": "roofing",
+        "Transportation": "local_shipping", "Machinery": "precision_manufacturing",
+        "Tools": "build", "Water": "water", "Miscellaneous": "category", "Other Materials": "inventory_2"
+    };
+
+    function getIconForCategory(catName) {
+        return CATEGORY_ICONS[catName] || "label";
+    }
+
+    // --- DATA MIGRATION SYSTEM ---
+    // Fixes old string amounts and bad data formats so old records calculate perfectly
+    function migrateData() {
+        let dataChanged = false;
+        
+        // Migrate Expenses
+        expenses = expenses.map(exp => {
+            let e = { ...exp };
+            
+            // Convert string price to safe float number
+            if (typeof e.price !== 'number' || isNaN(e.price)) {
+                let rawPrice = String(e.price).replace(/[^0-9.-]+/g, "");
+                e.price = parseFloat(rawPrice) || 0;
+                dataChanged = true;
+            }
+            
+            // Assign default category if missing
+            if (!e.category) { 
+                e.category = "Miscellaneous"; 
+                dataChanged = true; 
+            }
+            return e;
+        });
+
+        // Migrate Targets
+        targets = targets.map(t => {
+            let targ = { ...t };
+            // Convert string target amount to safe float number
+            if (typeof targ.amount !== 'number' || isNaN(targ.amount)) {
+                let rawAmt = String(targ.amount).replace(/[^0-9.-]+/g, "");
+                targ.amount = parseFloat(rawAmt) || 0;
+                dataChanged = true;
+            }
+            return targ;
+        });
+
+        // Save safely migrated data back to localStorage
+        if (dataChanged) {
+            localStorage.setItem('expensesArray', JSON.stringify(expenses));
+            localStorage.setItem('targetsArray', JSON.stringify(targets));
+        }
+    }
+
+
     // --- PWA INSTALLATION LOGIC ---
     let deferredPrompt;
     window.addEventListener('beforeinstallprompt', (e) => {
@@ -553,6 +628,8 @@
     window.onload = () => {
         document.getElementById('totalBudget').value = localStorage.getItem('budget') || '';
         setCurrentDateTime();
+        
+        migrateData(); // Safely migrate all old user data BEFORE rendering UI
         syncAndRenderAll(); 
     };
 
@@ -756,7 +833,7 @@
         setCurrentDateTime();
         
         localStorage.setItem('expensesArray', JSON.stringify(expenses));
-        syncAndRenderAll(); // Fully synchronizes UI elements immediately
+        syncAndRenderAll(); 
         switchScreen('history');
     }
 
@@ -806,18 +883,15 @@
     }
 
     // --- MAIN SYNCHRONIZATION ENGINE ---
-    // Fixes Issue 1 & 2: Real-time recalculation of all interconnected components
     function syncAndRenderAll() {
         let budget = parseFloat(document.getElementById('totalBudget').value) || 0;
         let totalSpent = 0; let todaySpent = 0; let yesterdaySpent = 0;
         let todayStr = getTargetDateString(0); let yesterdayStr = getTargetDateString(1);
 
-        // Issue 2 Fix: Initialize ALL available categories with 0, so they reflect correctly even without expenses
         let categoryTotals = {};
         userCategories.forEach(cat => { categoryTotals[cat] = 0; });
-        targets.forEach(t => { categoryTotals[t.category] = 0; }); // Safety check for target categories
+        targets.forEach(t => { categoryTotals[t.category] = 0; }); 
 
-        // Process all expenses as single source of truth
         expenses.forEach(exp => {
             totalSpent += exp.price;
             if(exp.date === todayStr) todaySpent += exp.price;
@@ -857,7 +931,7 @@
             document.getElementById('dashUsedVal').style.color = 'var(--danger)';
         }
 
-        // 3. Render Category Summary (Fully synchronized, includes 0 balances)
+        // 3. Render Category Summary
         let catContainer = document.getElementById('categorySummaryContainer');
         catContainer.innerHTML = '';
         const keys = Object.keys(categoryTotals);
@@ -875,7 +949,7 @@
             });
         }
 
-        // 4. Render Active Targets (Fixes Issue 1: dynamically calculates paid amount)
+        // 4. Render Active Targets 
         let targetContainer = document.getElementById('targetsContainer');
         targetContainer.innerHTML = '';
         if(targets.length === 0) {
@@ -915,7 +989,7 @@
             });
         }
 
-        // 5. Render History List
+        // 5. Render History List with dynamic icons
         renderTableOnly();
     }
 
@@ -940,6 +1014,9 @@
                 
                 container.innerHTML += `
                     <div class="expense-item">
+                        <div class="expense-icon">
+                            <span class="material-symbols-outlined">${getIconForCategory(cat)}</span>
+                        </div>
                         <div class="exp-info">
                             <div class="exp-title">${exp.name}</div>
                             <div class="exp-meta">
@@ -1006,7 +1083,6 @@
         let totalSpent = 0; let todaySpent = 0; let yesterdaySpent = 0;
         let todayStr = getTargetDateString(0); let yesterdayStr = getTargetDateString(1);
         
-        // Match PDF report zero-handling with the core logic
         let categoryTotals = {};
         userCategories.forEach(cat => categoryTotals[cat] = 0);
         targets.forEach(t => categoryTotals[t.category] = 0);
